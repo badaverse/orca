@@ -6414,28 +6414,40 @@ export class OrcaRuntimeService {
     const groups = snapshot.tabGroups ?? []
     const hasTargetGroup =
       targetGroupId !== undefined && groups.some((group) => group.id === targetGroupId)
+    // Why: remote clients send their local group id, which may be synthetic and
+    // unknown here. Fall back to a group that already holds browser tabs so the
+    // new tab never evicts a terminal from its group's active slot.
+    const browserTabIds = new Set(
+      snapshot.tabs
+        .filter((candidate) => candidate.type === 'browser' && candidate.id !== tab.id)
+        .map((candidate) => candidate.id)
+    )
+    const moveTargetGroupId = hasTargetGroup
+      ? targetGroupId
+      : groups.find((group) => group.tabOrder.some((id) => browserTabIds.has(id)))?.id
     // Why: move the new browser into the group whose "+" was clicked, removing it
     // from wherever the rebuild placed it. Only the TARGET group's activeTabId
     // (and the global active) change — every other group's active tab is left
     // intact, so creating in the right group never resets the left group's tab.
-    const nextGroups = hasTargetGroup
-      ? groups.map((group) => {
-          const withoutTab = group.tabOrder.filter((id) => id !== tab.id)
-          if (group.id === targetGroupId) {
-            return { ...group, tabOrder: [...withoutTab, tab.id], activeTabId: tab.id }
-          }
-          return withoutTab.length === group.tabOrder.length
-            ? group
-            : { ...group, tabOrder: withoutTab }
-        })
-      : groups.map((group) =>
-          group.tabOrder.includes(tab.id) ? { ...group, activeTabId: tab.id } : group
-        )
+    const nextGroups =
+      moveTargetGroupId !== undefined
+        ? groups.map((group) => {
+            const withoutTab = group.tabOrder.filter((id) => id !== tab.id)
+            if (group.id === moveTargetGroupId) {
+              return { ...group, tabOrder: [...withoutTab, tab.id], activeTabId: tab.id }
+            }
+            return withoutTab.length === group.tabOrder.length
+              ? group
+              : { ...group, tabOrder: withoutTab }
+          })
+        : groups.map((group) =>
+            group.tabOrder.includes(tab.id) ? { ...group, activeTabId: tab.id } : group
+          )
     const nextSnapshot: RuntimeMobileSessionTabsSnapshot = {
       ...snapshot,
       publicationEpoch: `headless:${Date.now().toString(36)}`,
       snapshotVersion: snapshot.snapshotVersion + 1,
-      ...(hasTargetGroup ? { activeGroupId: targetGroupId } : {}),
+      ...(moveTargetGroupId !== undefined ? { activeGroupId: moveTargetGroupId } : {}),
       activeTabId: tab.id,
       activeTabType: 'browser',
       tabs: snapshot.tabs.map((candidate) => ({
@@ -6447,7 +6459,7 @@ export class OrcaRuntimeService {
     this.mobileSessionTabsByWorktree.set(worktreeId, nextSnapshot)
     // Why: browser group membership is otherwise live-only; persist it so a
     // later rebuild keeps the browser in its group instead of coalescing left.
-    if (hasTargetGroup && nextSnapshot.tabGroupLayout) {
+    if (moveTargetGroupId !== undefined && nextSnapshot.tabGroupLayout) {
       this.persistHeadlessTabGroups(worktreeId, nextGroups, nextSnapshot.tabGroupLayout)
     }
     this.emitMobileSessionTabsSnapshot(nextSnapshot)

@@ -1326,7 +1326,8 @@ export class RuntimeBrowserCommands {
       worktreeId,
       params.profileId,
       params.profileId ? sessionPartition : undefined,
-      params.activate
+      params.activate,
+      params.targetGroupId
     )
 
     // Why: the webview must mount and register before the tab is operable, so wait here (returning the ID anyway on timeout).
@@ -1719,7 +1720,8 @@ export class RuntimeBrowserCommands {
     worktreeId: string | undefined,
     profileId: string | undefined,
     sessionPartition: string | undefined,
-    activate?: boolean
+    activate?: boolean,
+    targetGroupId?: string
   ): Promise<{ browserPageId: string }> {
     const win = this.host.getAuthoritativeWindow()
     const requestId = randomUUID()
@@ -1753,7 +1755,9 @@ export class RuntimeBrowserCommands {
         // Why: keep these undefined (not null) when no profile is chosen so the renderer still applies default-profile inheritance.
         sessionProfileId: profileId,
         sessionPartition,
-        activate
+        activate,
+        // Why: remote clients pick the split group; dropping it here made the tab land in the host's UI-active group.
+        targetGroupId
       })
     })
 

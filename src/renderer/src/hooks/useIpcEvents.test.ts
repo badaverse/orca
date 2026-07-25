@@ -1083,6 +1083,278 @@ describe('useIpcEvents browser tab create routing', () => {
       expect.objectContaining({ detail: { worktreeId: 'wt-2' } })
     )
   })
+
+  type TabCreateRequestData = {
+    requestId: string
+    worktreeId?: string | null
+    url: string
+    sessionProfileId?: string
+    activate?: boolean
+    targetGroupId?: string
+  }
+
+  function stubRequestTabCreateHarness(): {
+    createBrowserTab: ReturnType<typeof vi.fn>
+    fireRequestTabCreate: (data: TabCreateRequestData) => void
+  } {
+    const requestTabCreateListenerRef: {
+      current: ((data: TabCreateRequestData) => void) | null
+    } = { current: null }
+    const createBrowserTab = vi.fn(() => {
+      const workspace = { id: 'workspace-new', activePageId: 'page-new', pageIds: ['page-new'] }
+      state.browserPagesByWorkspace['workspace-new'] = [{ id: 'page-new', worktreeId: 'wt-1' }]
+      return workspace
+    })
+    const state = {
+      setUpdateStatus: vi.fn(),
+      fetchRepos: vi.fn(),
+      fetchWorktrees: vi.fn(),
+      setActiveView: vi.fn(),
+      activeModal: null,
+      closeModal: vi.fn(),
+      openModal: vi.fn(),
+      activeWorktreeId: 'wt-1',
+      activeView: 'terminal',
+      setActiveRepo: vi.fn(),
+      setActiveWorktree: vi.fn(),
+      revealWorktreeInSidebar: vi.fn(),
+      setIsFullScreen: vi.fn(),
+      updateBrowserTabPageState: vi.fn(),
+      updateBrowserPageState: vi.fn(),
+      activeTabType: 'terminal',
+      editorFontZoomLevel: 0,
+      setEditorFontZoomLevel: vi.fn(),
+      setRateLimitsFromPush: vi.fn(),
+      setSshConnectionState: vi.fn(),
+      setSshTargetLabels: vi.fn(),
+      setPortForwards: vi.fn(),
+      clearPortForwards: vi.fn(),
+      setDetectedPorts: vi.fn(),
+      enqueueSshCredentialRequest: vi.fn(),
+      removeSshCredentialRequest: vi.fn(),
+      clearTabPtyId: vi.fn(),
+      settings: { terminalFontSize: 13 },
+      activeBrowserTabIdByWorktree: { 'wt-1': 'workspace-active' },
+      browserTabsByWorktree: {
+        'wt-1': [{ id: 'workspace-active', activePageId: 'page-active', pageIds: ['page-active'] }]
+      },
+      browserPagesByWorkspace: {
+        'workspace-active': [{ id: 'page-active', worktreeId: 'wt-1' }]
+      } as Record<string, { id: string; worktreeId: string }[]>,
+      unifiedTabsByWorktree: {
+        'wt-1': [
+          {
+            id: 'unified-active',
+            groupId: 'group-browser',
+            contentType: 'browser',
+            entityId: 'workspace-active'
+          }
+        ]
+      },
+      groupsByWorktree: {
+        'wt-1': [
+          { id: 'group-term', worktreeId: 'wt-1', activeTabId: 'unified-term', tabOrder: [] },
+          { id: 'group-browser', worktreeId: 'wt-1', activeTabId: 'unified-active', tabOrder: [] },
+          { id: 'group-right', worktreeId: 'wt-1', activeTabId: null, tabOrder: [] }
+        ]
+      },
+      createBrowserTab
+    }
+
+    vi.doMock('react', async () => {
+      const actual = await vi.importActual<typeof ReactModule>('react')
+      return {
+        ...actual,
+        useEffect: (effect: () => void | (() => void)) => {
+          effect()
+        }
+      }
+    })
+    vi.doMock('../store', () => ({
+      useAppStore: {
+        subscribe: vi.fn(() => () => {}),
+        getState: () => state
+      }
+    }))
+    vi.doMock('@/components/browser-pane/browser-automation-visibility', () => ({
+      acquireBrowserAutomationVisibility: vi.fn(() => 'lease'),
+      releaseBrowserAutomationVisibility: vi.fn()
+    }))
+    vi.doMock('@/lib/ui-zoom', () => ({ applyUIZoom: vi.fn() }))
+    vi.doMock('@/lib/worktree-activation', () => ({
+      activateAndRevealWorktree: vi.fn(),
+      ensureWorktreeHasInitialTerminal: vi.fn()
+    }))
+    vi.doMock('@/components/sidebar/visible-worktrees', () => ({ getVisibleWorktreeIds: () => [] }))
+    vi.doMock('@/lib/editor-font-zoom', () => ({
+      nextEditorFontZoomLevel: vi.fn(() => 0),
+      computeEditorFontSize: vi.fn(() => 13)
+    }))
+    vi.doMock('@/components/settings/SettingsConstants', () => ({
+      zoomLevelToPercent: vi.fn(() => 100),
+      ZOOM_MIN: -3,
+      ZOOM_MAX: 3
+    }))
+    vi.doMock('@/lib/zoom-events', () => ({ dispatchZoomLevelChanged: vi.fn() }))
+
+    vi.stubGlobal('window', {
+      dispatchEvent: vi.fn(),
+      setTimeout: vi.fn(() => 1),
+      clearTimeout: vi.fn(),
+      api: {
+        repos: { onChanged: () => () => {} },
+        worktrees: {
+          onChanged: () => () => {},
+          onGitStatusMetadataChanged: () => () => {},
+          onHeadIdentitiesChanged: () => () => {},
+          onBaseStatus: () => () => {},
+          onRemoteBranchConflict: () => () => {}
+        },
+        ui: {
+          onStateChanged: () => () => {},
+          onOpenSettings: () => () => {},
+          consumePendingOpenSettings: () => Promise.resolve(false),
+          onOpenFeatureTour: () => () => {},
+          onToggleLeftSidebar: () => () => {},
+          onToggleRightSidebar: () => () => {},
+          onToggleWorktreePalette: () => () => {},
+          onToggleFloatingTerminal: () => () => {},
+          onOpenQuickOpen: () => () => {},
+          onToggleQuickCommandsMenu: () => () => {},
+          onOpenNewWorkspace: () => () => {},
+          onOpenTasks: () => () => {},
+          onJumpToWorktreeIndex: () => () => {},
+          onJumpToTabIndex: () => () => {},
+          onWorktreeHistoryNavigate: () => () => {},
+          onActivateWorktree: () => () => {},
+          onCreateTerminal: () => () => {},
+          onRequestTerminalCreate: () => () => {},
+          onRequestTerminalTabMount: () => () => {},
+          replyTerminalCreate: () => {},
+          onSplitTerminal: () => () => {},
+          onRenameTerminal: () => () => {},
+          onFocusTerminal: () => () => {},
+          onFocusEditorTab: () => () => {},
+          onCloseSessionTab: () => () => {},
+          onMoveSessionTab: () => () => {},
+          onOpenFileFromMobile: () => () => {},
+          onOpenDiffFromMobile: () => () => {},
+          onCloseTerminal: () => () => {},
+          onSleepWorktree: () => () => {},
+          onResumeSleepingAgents: () => () => {},
+          onNewBrowserTab: () => () => {},
+          onNewMarkdownTab: () => () => {},
+          onRequestTabCreate: (
+            listener: NonNullable<typeof requestTabCreateListenerRef.current>
+          ) => {
+            requestTabCreateListenerRef.current = listener
+            return () => {}
+          },
+          replyTabCreate: vi.fn(),
+          onRequestTabClose: () => () => {},
+          replyTabClose: () => {},
+          onRequestTabSetProfile: () => () => {},
+          replyTabSetProfile: () => {},
+          onNewTerminalTab: () => () => {},
+          onCloseActiveTab: () => () => {},
+          onSwitchTab: () => () => {},
+          onSwitchTabAcrossAllTypes: () => () => {},
+          onSwitchRecentTab: () => () => {},
+          onSwitchTerminalTab: () => () => {},
+          onToggleStatusBar: () => () => {},
+          onFullscreenChanged: () => () => {},
+          onTerminalZoom: () => () => {},
+          getZoomLevel: () => 0,
+          set: vi.fn()
+        },
+        settings: { onChanged: () => () => {} },
+        updater: {
+          getStatus: () => Promise.resolve({ state: 'idle' }),
+          onStatus: () => () => {},
+          onClearDismissal: () => () => {}
+        },
+        browser: {
+          onGuestLoadFailed: () => () => {},
+          onOpenLinkInOrcaTab: () => () => {},
+          onNavigationUpdate: () => () => {},
+          onActivateView: () => () => {},
+          onPaneFocus: () => () => {}
+        },
+        rateLimits: {
+          get: () => Promise.resolve({ limits: {}, lastUpdatedAt: Date.now() }),
+          onUpdate: () => () => {}
+        },
+        ssh: {
+          listTargets: () => Promise.resolve([]),
+          listPortForwards: () => Promise.resolve([]),
+          listDetectedPorts: () => Promise.resolve([]),
+          getState: () => Promise.resolve(null),
+          onStateChanged: () => () => {},
+          onCredentialRequest: () => () => {},
+          onPortForwardsChanged: () => () => {},
+          onDetectedPortsChanged: () => () => {},
+          onCredentialResolved: () => () => {}
+        },
+        runtime: {
+          getTerminalFitOverrides: () => Promise.resolve([]),
+          getTerminalDrivers: () => Promise.resolve([]),
+          getBrowserDrivers: () => Promise.resolve([]),
+          onTerminalFitOverrideChanged: () => () => {},
+          onTerminalDriverChanged: () => () => {},
+          onBrowserDriverChanged: () => () => {}
+        },
+        agentStatus: { onSet: () => () => {} }
+      }
+    })
+
+    return {
+      createBrowserTab,
+      fireRequestTabCreate: (data) => requestTabCreateListenerRef.current?.(data)
+    }
+  }
+
+  it('honors a requested group id that exists locally for a foreground create', async () => {
+    const { createBrowserTab, fireRequestTabCreate } = stubRequestTabCreateHarness()
+    const { useIpcEvents } = await import('./useIpcEvents')
+    useIpcEvents()
+
+    fireRequestTabCreate({
+      requestId: 'req-grouped',
+      worktreeId: 'wt-1',
+      url: 'https://example.com',
+      activate: true,
+      targetGroupId: 'group-right'
+    })
+
+    expect(createBrowserTab).toHaveBeenCalledWith(
+      'wt-1',
+      'https://example.com',
+      expect.objectContaining({ activate: true, targetGroupId: 'group-right' })
+    )
+  })
+
+  it('falls back to the active browser group when the requested group is unknown', async () => {
+    const { createBrowserTab, fireRequestTabCreate } = stubRequestTabCreateHarness()
+    const { useIpcEvents } = await import('./useIpcEvents')
+    useIpcEvents()
+
+    // Why: remote clients send synthetic group ids the host has never seen; the
+    // create must land beside the existing browser tabs, not evict the
+    // terminal from the host's UI-active group.
+    fireRequestTabCreate({
+      requestId: 'req-synthetic',
+      worktreeId: 'wt-1',
+      url: 'https://example.com',
+      activate: true,
+      targetGroupId: 'web-session-tabs:unknown'
+    })
+
+    expect(createBrowserTab).toHaveBeenCalledWith(
+      'wt-1',
+      'https://example.com',
+      expect.objectContaining({ activate: true, targetGroupId: 'group-browser' })
+    )
+  })
 })
 
 describe('useIpcEvents updater integration', () => {

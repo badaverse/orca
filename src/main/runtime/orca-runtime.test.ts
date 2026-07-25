@@ -22852,6 +22852,75 @@ describe('OrcaRuntimeService', () => {
     expect(clearedSurface?.type === 'browser' && clearedSurface.isPinned).toBe(false)
   })
 
+  it('keeps the terminal group active slot when a headless browser create targets an unknown group', async () => {
+    const { runtimeStore } = makeRuntimeStoreWithWorkspaceSession(
+      makeWorkspaceSessionWithHeadlessTerminal()
+    )
+    const runtime = new OrcaRuntimeService(runtimeStore as never)
+    runtime.setOffscreenBrowserBackend({ createTab: vi.fn(), closeTab: vi.fn() })
+    runtime.setAgentBrowserBridge({
+      tabList: vi.fn(() => ({
+        tabs: [
+          { browserPageId: 'page-old', index: 0, url: 'https://old.example/', title: 'Old' },
+          { browserPageId: 'page-new', index: 1, url: 'about:blank', title: 'New', active: true }
+        ]
+      }))
+    } as never)
+    // Why: model a live headless session (in-memory snapshot) with a terminal
+    // group and a separate browser group, before the new page is grouped.
+    runtime['mobileSessionTabsByWorktree'].set(TEST_WORKTREE_ID, {
+      worktree: TEST_WORKTREE_ID,
+      publicationEpoch: 'headless:test',
+      snapshotVersion: 1,
+      activeGroupId: 'group-term',
+      activeTabId: 'host-tab-surface',
+      activeTabType: 'terminal',
+      tabGroups: [
+        { id: 'group-term', activeTabId: 'host-tab', tabOrder: ['host-tab'] },
+        { id: 'group-browser', activeTabId: 'page-old', tabOrder: ['page-old'] }
+      ],
+      tabs: [
+        {
+          type: 'terminal',
+          id: 'host-tab-surface',
+          parentTabId: 'host-tab',
+          title: 'Persisted Terminal',
+          isActive: true
+        },
+        {
+          type: 'browser',
+          id: 'page-old',
+          title: 'Old',
+          browserWorkspaceId: 'page-old',
+          browserPageId: 'page-old',
+          url: 'https://old.example/',
+          loading: false,
+          canGoBack: false,
+          canGoForward: false,
+          isActive: false
+        }
+      ]
+    } as never)
+
+    // Why: remote clients send their local (often synthetic) group id, which a
+    // headless host has never seen; the fallback must not evict the terminal.
+    runtime['markHeadlessBrowserSessionTabActive'](
+      TEST_WORKTREE_ID,
+      'page-new',
+      'web-session-tabs:unknown-group'
+    )
+
+    const snapshot = runtime['mobileSessionTabsByWorktree'].get(TEST_WORKTREE_ID)
+    const termGroup = snapshot?.tabGroups?.find((group) => group.id === 'group-term')
+    const browserGroup = snapshot?.tabGroups?.find((group) => group.id === 'group-browser')
+    expect(termGroup?.activeTabId).toBe('host-tab')
+    expect(termGroup?.tabOrder).toEqual(['host-tab'])
+    expect(browserGroup?.tabOrder).toContain('page-new')
+    expect(browserGroup?.activeTabId).toBe('page-new')
+    expect(snapshot?.activeTabId).toBe('page-new')
+    expect(snapshot?.activeTabType).toBe('browser')
+  })
+
   it('persists headless tab viewMode and surfaces it through a cold rehydrate', async () => {
     const session = makeWorkspaceSessionWithHeadlessTerminal()
     const { runtimeStore, getSession } = makeRuntimeStoreWithWorkspaceSession(session)

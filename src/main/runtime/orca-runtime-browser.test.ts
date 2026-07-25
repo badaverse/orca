@@ -254,6 +254,58 @@ describe('RuntimeBrowserCommands browser screencast', () => {
     expect(bridge.setActiveTab).toHaveBeenCalledWith(101, 'wt-1')
   })
 
+  it('forwards targetGroupId to the renderer tab-create request', async () => {
+    const { RuntimeBrowserCommands } = await import('./orca-runtime-browser')
+    const webContents = { send: vi.fn() }
+    const send = vi.fn((channel: string, data: { requestId: string }) => {
+      expect(channel).toBe('browser:requestTabCreate')
+      const handler = ipcMainOnMock.mock.calls.find(
+        ([eventName]) => eventName === 'browser:tabCreateReply'
+      )?.[1] as
+        | ((event: unknown, reply: { requestId: string; browserPageId?: string }) => void)
+        | undefined
+      handler?.({ sender: webContents } as never, {
+        requestId: data.requestId,
+        browserPageId: 'page-grouped'
+      })
+    })
+    webContents.send = send
+    const bridge = {
+      getRegisteredTabs: vi.fn(() => new Map([['page-grouped', 101]])),
+      getActivePageId: vi.fn(() => 'page-grouped'),
+      setActiveTab: vi.fn(),
+      tabList: vi.fn(() => ({ tabs: [] }))
+    } as unknown as AgentBrowserBridge
+    const commands = new RuntimeBrowserCommands(
+      createHost({
+        getAgentBrowserBridge: () => bridge,
+        getAvailableAuthoritativeWindow: vi.fn(() => ({}) as never),
+        getAuthoritativeWindow: vi.fn(() => ({ webContents }) as never)
+      })
+    )
+
+    await expect(
+      commands.browserTabCreate({
+        worktree: 'id:wt-1',
+        url: 'about:blank',
+        activate: true,
+        targetGroupId: 'group-right'
+      })
+    ).resolves.toEqual({ browserPageId: 'page-grouped' })
+
+    // Why: dropping the group id makes the host renderer fall back to its own
+    // UI-active group, evicting the terminal pane a remote client had visible.
+    expect(send).toHaveBeenCalledWith(
+      'browser:requestTabCreate',
+      expect.objectContaining({
+        url: 'about:blank',
+        worktreeId: 'wt-1',
+        activate: true,
+        targetGroupId: 'group-right'
+      })
+    )
+  })
+
   it('sends the resolved isolated profile partition when creating a renderer tab', async () => {
     const { RuntimeBrowserCommands } = await import('./orca-runtime-browser')
     const webContents = { send: vi.fn() }

@@ -2324,11 +2324,19 @@ export function useIpcEvents(): void {
               )
             : undefined
 
-          // Why: a user-initiated open (data.activate, e.g. mobile tapping an HTML path) foregrounds the tab so it lands in active-group order and publishes to mobile.
-          // Agent/automation opens stay in the background (activate:false) in the active browser group.
+          // Why: a remote client's group id only binds when it exists here; a
+          // synthetic/unknown id must fall back to the browser group so the new
+          // tab never evicts the terminal from the host's UI-active group.
+          const requestedGroupId =
+            data.targetGroupId &&
+            (store.groupsByWorktree[worktreeId] ?? []).some(
+              (group) => group.id === data.targetGroupId
+            )
+              ? data.targetGroupId
+              : undefined
           const workspace = store.createBrowserTab(worktreeId, data.url, {
             title: data.url,
-            targetGroupId: data.activate ? undefined : activeBrowserUnifiedTab?.groupId,
+            targetGroupId: requestedGroupId ?? activeBrowserUnifiedTab?.groupId,
             sessionProfileId: data.sessionProfileId,
             sessionPartition: data.sessionPartition,
             activate: data.activate === true

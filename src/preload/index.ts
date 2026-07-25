@@ -3447,6 +3447,7 @@ const api = {
         sessionProfileId?: string | null
         sessionPartition?: string
         activate?: boolean
+        targetGroupId?: string
       }) => void
     ): (() => void) => {
       const listener = (
@@ -3458,6 +3459,7 @@ const api = {
           sessionProfileId?: string | null
           sessionPartition?: string
           activate?: boolean
+          targetGroupId?: string
         }
       ) => callback(data)
       ipcRenderer.on('browser:requestTabCreate', listener)

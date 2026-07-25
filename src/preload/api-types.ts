@@ -3042,6 +3042,7 @@ export type PreloadApi = {
         sessionProfileId?: string | null
         sessionPartition?: string
         activate?: boolean
+        targetGroupId?: string
       }) => void
     ) => () => void
     replyTabCreate: (reply: { requestId: string; browserPageId?: string; error?: string }) => void

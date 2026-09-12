@@ -41,14 +41,15 @@ function applyActivityDisplayDensity(source) {
   if (classEnd < source.indexOf(anchor)) {
     throw new Error('MainActivity class closing brace missing')
   }
-  source = `${source.slice(0, classEnd)}${METHODS}${source.slice(classEnd)}`
+  const eol = source.includes('\r\n') ? '\r\n' : '\n'
+  source = `${source.slice(0, classEnd)}${METHODS.replaceAll('\n', eol)}${source.slice(classEnd)}`
   if (!source.includes(IMPORT)) {
-    source = source.replace(/^(package [^\r\n]+)/m, `$1\n${IMPORT}`)
+    source = source.replace(/^(package [^\r\n]+)/m, `$1${eol}${IMPORT}`)
   }
   // RN can overwrite its global metrics while creating the root view.
   return source.replace(
     anchor,
-    `DisplayMetricsHolder.initDisplayMetrics(this)\n    ${anchor}\n    syncActivityDisplayDensity()`
+    `DisplayMetricsHolder.initDisplayMetrics(this)${eol}    ${anchor}${eol}    syncActivityDisplayDensity()`
   )
 }
 

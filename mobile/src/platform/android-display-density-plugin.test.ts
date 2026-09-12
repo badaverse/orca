@@ -22,14 +22,15 @@ describe('Activity display density plugin', () => {
     (eol) => {
       const result = applyActivityDisplayDensity(template.replaceAll('\n', eol))
       expect(applyActivityDisplayDensity(result)).toBe(result)
+      expect(result.replaceAll(eol, '')).not.toMatch(/[\r\n]/)
       expect(result).toContain('SplashScreenManager.registerOnActivity(this)')
       expect(result).toContain('override fun getMainComponentName(): String = "main"')
       expect(result).toContain(
-        'DisplayMetricsHolder.initDisplayMetrics(this)\n    super.onCreate(null)\n    syncActivityDisplayDensity()'
+        `DisplayMetricsHolder.initDisplayMetrics(this)${eol}    super.onCreate(null)${eol}    syncActivityDisplayDensity()`
       )
-      expect(result).toContain('super.onResume()\n    syncActivityDisplayDensity()')
+      expect(result).toContain(`super.onResume()${eol}    syncActivityDisplayDensity()`)
       expect(result).toContain(
-        'super.onConfigurationChanged(newConfig)\n    syncActivityDisplayDensity()'
+        `super.onConfigurationChanged(newConfig)${eol}    syncActivityDisplayDensity()`
       )
       expect(result).toContain('resources.configuration.fontScale.toDouble()')
       expect(result).toContain('"didUpdateDimensions"')

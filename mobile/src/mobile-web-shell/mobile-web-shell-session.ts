@@ -1,12 +1,9 @@
 import type { MobileWebShellFailureReason } from '../../modules/orca-mobile-web-shell/src/load-state'
-import type { RpcClient } from '../transport/rpc-client'
-import type { ConnectionState } from '../transport/types'
 import { evaluateMobileWebBundleCompat } from '../transport/mobile-web-bundle-compat'
 import type {
   CachedGeneration,
   MobileWebShellGates,
   MobileWebShellManifestFacts,
-  MobileWebShellReachability,
   MobileWebShellReadFailure,
   MobileWebShellSession,
   MobileWebShellSessionEffect,
@@ -15,32 +12,11 @@ import type {
   MobileWebShellStep
 } from './mobile-web-shell-session-contract'
 import { awaitsGates, gateKey, gateVerdict } from './mobile-web-shell-gates'
-import { grantsForRoute, implementedPageRoutes, matchesRoutePattern } from './page-route-policy'
-
-/**
- * The host's connection state as the three answers a step here needs.
- *
- * `reconnecting` is unreachable, not connecting, and that is the whole point of the distinction: a
- * host whose desktop is gone never settles on `disconnected`. The client dials, fails, schedules a
- * retry and cycles `connecting` -> `reconnecting` -> `connecting` with the delay growing to a
- * minute, so treating `reconnecting` as "still dialling" leaves a phone with a perfectly good
- * cached workspace spinning forever. `connecting` alone is the first dial, which is worth the wait
- * because it usually succeeds; a scheduled retry after a failure is evidence the host is not there.
- */
-export function readMobileWebShellReachability(
-  connState: ConnectionState,
-  client: RpcClient | null
-): MobileWebShellReachability {
-  if (connState === 'connected') {
-    return client === null ? 'connecting' : 'connected'
-  }
-  return connState === 'connecting' || connState === 'handshaking' ? 'connecting' : 'unreachable'
-}
+import { matchesRoutePattern, routeViewOf } from './page-route-policy'
 
 const CHECKING: MobileWebShellSessionState = { kind: 'checking' }
 const NATIVE_ROUTE: MobileWebShellSessionState = { kind: 'native-route' }
 
-/** Whether the page renders this route: listed by the bundle, and needing nothing this shell lacks. */
 function rendersRoute(pageRoutes: readonly string[], pathname: string): boolean {
   return pageRoutes.some((pattern) => matchesRoutePattern(pathname, pattern))
 }
@@ -49,6 +25,7 @@ export function createMobileWebShellSession(routePathname: string): MobileWebShe
   return {
     routePathname,
     pageRoutes: [],
+    pageRouteGrants: [],
     routeGrants: [],
     state: CHECKING,
     retriedOnce: false,
@@ -112,11 +89,13 @@ function startFlow(
   return step(session, { ...base, state: CHECKING }, [...before, { kind: 'open-cache' }])
 }
 
-/** Puts a generation that is already on disk on screen. The only producer of `open-generation`. */
+/** Puts a generation that is already on disk on screen. The only producer of `open-generation`.
+ *  `andThen` is the disk work that opening one may owe, which runs after the view has its bytes. */
 function openCached(
   session: MobileWebShellSession,
   generation: CachedGeneration,
-  patch: Partial<MobileWebShellSession> = {}
+  patch: Partial<MobileWebShellSession> = {},
+  andThen: readonly MobileWebShellSessionEffect[] = []
 ): MobileWebShellStep {
   return step(session, { ...patch, state: { kind: 'activating' } }, [
     {
@@ -124,7 +103,8 @@ function openCached(
       directory: generation.directory,
       buildId: generation.buildId,
       totalBytes: generation.totalBytes
-    }
+    },
+    ...andThen
   ])
 }
 
@@ -148,11 +128,10 @@ function onCacheRead(
       return step(session, { cached: null, state: { kind: 'offline' } })
     }
     // The cached bundle's own list, which is the only one an unreachable host can be judged by.
-    const pageRoutes = implementedPageRoutes(generation.routes)
-    const routeGrants = grantsForRoute(generation.routes, session.routePathname)
-    return rendersRoute(pageRoutes, session.routePathname)
-      ? openCached(session, generation, { cached: generation, pageRoutes, routeGrants })
-      : step(session, { cached: generation, pageRoutes, routeGrants, state: NATIVE_ROUTE })
+    const view = routeViewOf(generation.routes, session.routePathname)
+    return rendersRoute(view.pageRoutes, session.routePathname)
+      ? openCached(session, generation, { cached: generation, ...view })
+      : step(session, { cached: generation, ...view, state: NATIVE_ROUTE })
   }
   return step(session, { cached: generation, state: CHECKING }, [{ kind: 'read-manifest' }])
 }
@@ -167,10 +146,29 @@ function onManifestRead(
   }
   // Before the compat verdict, because a route that stays native has nothing to wall about: a
   // bundle this shell could not open is not a reason to refuse a screen it was never going to open.
-  const pageRoutes = implementedPageRoutes(manifest.routes)
-  const routeGrants = grantsForRoute(manifest.routes, session.routePathname)
+  const { pageRoutes, pageRouteGrants, routeGrants } = routeViewOf(
+    manifest.routes,
+    session.routePathname
+  )
+  // Same build id is the same bytes, because the id is their digest: a route-grant edit publishes
+  // the generation already on disk under a newer manifest. Read before this route's verdict,
+  // because that verdict is about this route while the manifest is the truth about the whole
+  // generation — a list that takes this screen native, or names a bundle this shell cannot open,
+  // still grants or revokes the other routes those assets serve, and what is stored beside them is
+  // the whole of the next offline verdict.
+  const cached = session.cached
+  const same: CachedGeneration | null =
+    cached === null || cached.buildId !== manifest.buildId
+      ? null
+      : { ...cached, routes: manifest.routes }
+  const persist: readonly MobileWebShellSessionEffect[] =
+    same === null ? [] : [{ kind: 'persist-manifest', manifest: manifest.wire }]
   if (!rendersRoute(pageRoutes, session.routePathname)) {
-    return step(session, { pageRoutes, routeGrants, state: NATIVE_ROUTE })
+    return step(
+      session,
+      { cached: same ?? cached, pageRoutes, pageRouteGrants, routeGrants, state: NATIVE_ROUTE },
+      persist
+    )
   }
   const verdict = evaluateMobileWebBundleCompat({
     hostCapabilities: gates.hostCapabilities,
@@ -178,16 +176,25 @@ function onManifestRead(
     manifest
   })
   if (verdict.kind === 'blocked') {
+    // The one same-build read that is not written, and the held generation keeps its own routes
+    // with it: disk holds the last manifest this shell accepted, and an offline entry skips the
+    // compat check. Writing one this shell has just walled would have the next offline entry open
+    // a page under the grants of a bundle it had declared it cannot read.
     return step(session, { state: { kind: 'wall', verdict } })
   }
-  const cached = session.cached
-  if (cached !== null && cached.buildId === manifest.buildId) {
-    return openCached(session, cached, { pageRoutes, routeGrants })
+  if (same !== null) {
+    return openCached(
+      session,
+      same,
+      { cached: same, pageRoutes, pageRouteGrants, routeGrants },
+      persist
+    )
   }
   return step(
     session,
     {
       pageRoutes,
+      pageRouteGrants,
       routeGrants,
       state: {
         kind: 'fetching',
@@ -258,12 +265,14 @@ function onDownloadFailed(
     // download was attempted, so its `pageRoutes` and `routeGrants` are already on the session:
     // opening the cached page under them would grant it what a bundle it is not running declared,
     // and would mount it for a route only the newer bundle claims.
-    const pageRoutes = implementedPageRoutes(cached.routes)
-    const routeGrants = grantsForRoute(cached.routes, session.routePathname)
+    const { pageRoutes, pageRouteGrants, routeGrants } = routeViewOf(
+      cached.routes,
+      session.routePathname
+    )
     if (!rendersRoute(pageRoutes, session.routePathname)) {
-      return step(session, { pageRoutes, routeGrants, state: NATIVE_ROUTE })
+      return step(session, { pageRoutes, pageRouteGrants, routeGrants, state: NATIVE_ROUTE })
     }
-    return openCached(session, cached, { pageRoutes, routeGrants })
+    return openCached(session, cached, { pageRoutes, pageRouteGrants, routeGrants })
   }
   return step(session, {
     state: { kind: 'failed', reason: 'download-failed', retriedOnce: session.retriedOnce }

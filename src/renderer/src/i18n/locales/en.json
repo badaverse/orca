@@ -19456,5 +19456,11 @@
     "unavailable": "Unable to play this media file. The file may be unavailable or use an unsupported codec.",
     "openFailed": "Could not open this file in the default app.",
     "openDefault": "Open in Default App"
+  },
+  "remoteFloatingTerminal": {
+    "host": "Remote host",
+    "loading": "Loading remote sessions…",
+    "reconnect": "Reconnect",
+    "unavailableHost": "Unavailable host"
   }
 }

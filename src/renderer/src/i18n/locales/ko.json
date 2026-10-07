@@ -19208,5 +19208,11 @@
     "unavailable": "미디어 파일을 재생할 수 없습니다. 파일을 사용할 수 없거나 지원하지 않는 코덱일 수 있습니다.",
     "openFailed": "기본 앱에서 파일을 열 수 없습니다.",
     "openDefault": "기본 앱에서 열기"
+  },
+  "remoteFloatingTerminal": {
+    "host": "원격 호스트",
+    "loading": "원격 세션을 불러오는 중…",
+    "reconnect": "다시 연결",
+    "unavailableHost": "연결할 수 없는 호스트"
   }
 }

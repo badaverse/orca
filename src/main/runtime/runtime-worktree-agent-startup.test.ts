@@ -1,20 +1,12 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { Repo } from '../../shared/repo-types'
+import { tuiAgentToAgentKind } from '../../shared/agent-kind'
+import { getDefaultSettings } from '../../shared/constants'
+import type { RuntimeManagedWorktreeCreateArgs } from './runtime-managed-worktree-create-types'
 
 const mocks = vi.hoisted(() => ({
-  markAntigravityWorkspaceTrusted: vi.fn(),
-  markCodexProjectTrusted: vi.fn(),
-  markCopilotFolderTrusted: vi.fn(),
-  markCursorWorkspaceTrusted: vi.fn(),
   detectRemoteAgents: vi.fn(),
   detectInstalledAgentsWithShellPathHydration: vi.fn()
-}))
-
-vi.mock('../agent-trust-presets', () => ({
-  markAntigravityWorkspaceTrusted: mocks.markAntigravityWorkspaceTrusted,
-  markCodexProjectTrusted: mocks.markCodexProjectTrusted,
-  markCopilotFolderTrusted: mocks.markCopilotFolderTrusted,
-  markCursorWorkspaceTrusted: mocks.markCursorWorkspaceTrusted
 }))
 
 vi.mock('../preflight/agent-detection', () => ({
@@ -25,28 +17,30 @@ vi.mock('../preflight/agent-detection', () => ({
 import {
   buildWorktreeStartupForAgent,
   buildWorktreeStartupForDraft,
-  markLocalWorktreeTrusted
+  resolveWorktreeCreateAgentStartup
 } from './runtime-worktree-agent-startup'
 
 function makeRepo(fields: Partial<Repo>): Repo {
   return {
     id: 'repo-1',
-    name: 'repo',
+    displayName: 'repo',
+    badgeColor: '#737373',
+    addedAt: 0,
     path: '/srv/repo',
     connectionId: null,
     executionHostId: null,
     ...fields
-  } as Repo
+  }
 }
 
 const settings = {
+  ...getDefaultSettings('/tmp'),
   agentCmdOverrides: {},
   agentDefaultArgs: {},
   agentDefaultEnv: {},
   disabledTuiAgents: [],
-  defaultTuiAgent: undefined,
-  terminalWindowsShell: null
-} as never
+  defaultTuiAgent: null
+}
 
 /** The launched CLI name is the whole decision: `orca` is the relay shim, `orca-ide` is local. */
 function launchCliNameFor(repo: Repo): string {
@@ -101,6 +95,57 @@ describe('buildWorktreeStartupForAgent host resolution', () => {
       request_kind: 'new'
     })
   })
+
+  it('attributes a startup agent whose caller named no surface as unknown', () => {
+    const result = buildWorktreeStartupForAgent({
+      repo: makeRepo({}),
+      settings,
+      agent: 'claude',
+      getLaunchPlatform: () => 'linux',
+      toSessionOptions: () => undefined
+    })
+
+    expect(result.startup.telemetry).toEqual({
+      agent_kind: 'claude-code',
+      launch_source: 'unknown',
+      request_kind: 'new'
+    })
+  })
+})
+
+describe('buildWorktreeStartupForAgent prompt carry', () => {
+  const build = (onPromptCarry?: (carried: boolean) => void, terminalDefaultShell = '/bin/bash') =>
+    buildWorktreeStartupForAgent({
+      repo: makeRepo({}),
+      settings: Object.assign({}, settings, { terminalDefaultShell }),
+      agent: 'claude',
+      prompt: 'summarize the diff\nthen list the risks',
+      getLaunchPlatform: () => 'linux',
+      toSessionOptions: () => undefined,
+      ...(onPromptCarry ? { onPromptCarry } : {})
+    })
+
+  it('starts clean and reports it when a caller that pastes offers a prompt the line cannot carry', () => {
+    const onPromptCarry = vi.fn()
+    const result = build(onPromptCarry)
+
+    expect(result.startup.command).not.toContain('summarize')
+    expect(result.followup).toBeUndefined()
+    expect(onPromptCarry).toHaveBeenCalledWith(false)
+  })
+
+  it('carries a short-lined multi-line prompt on a local zsh line, as main typed it', () => {
+    const onPromptCarry = vi.fn()
+    const result = build(onPromptCarry, '/bin/zsh')
+
+    expect(result.startup.command).toContain('summarize the diff\nthen list the risks')
+    expect(onPromptCarry).toHaveBeenCalledWith(true)
+  })
+
+  it('keeps folding the prompt for a caller that delivers nothing afterwards', () => {
+    // `orca worktree create --prompt` has no post-start paste of its own for an argv agent.
+    expect(build().startup.command).toContain('summarize the diff')
+  })
 })
 
 describe('buildWorktreeStartupForDraft agent detection', () => {
@@ -115,7 +160,9 @@ describe('buildWorktreeStartupForDraft agent detection', () => {
       getLaunchPlatform: () => 'linux'
     })
 
-    expect(mocks.detectRemoteAgents).toHaveBeenCalledWith({ connectionId: 'openclaw' })
+    expect(mocks.detectRemoteAgents).toHaveBeenCalledWith({
+      connectionId: 'openclaw'
+    })
     expect(mocks.detectInstalledAgentsWithShellPathHydration).not.toHaveBeenCalled()
     expect(result?.agent).toBe('claude')
   })
@@ -134,56 +181,86 @@ describe('buildWorktreeStartupForDraft agent detection', () => {
     expect(mocks.detectRemoteAgents).not.toHaveBeenCalled()
     expect(result?.agent).toBe('claude')
   })
+
+  // The host picks and launches this agent itself, so it is attributed like any other it builds,
+  // whether the draft rides the launch command or is pasted once the agent is up.
+  it.each([
+    ['claude', 'cli', 'cli', false],
+    ['claude', undefined, 'unknown', false],
+    ['claude-agent-teams', 'orchestration', 'orchestration', true],
+    ['claude-agent-teams', undefined, 'unknown', true]
+  ] as const)(
+    'attributes a %s draft launch named %s as %s',
+    async (agent, launchSource, expected, pasted) => {
+      const result = await buildWorktreeStartupForDraft({
+        repo: makeRepo({}),
+        settings,
+        draft: 'ship it',
+        requestedAgent: agent,
+        getLaunchPlatform: () => 'linux',
+        ...(launchSource ? { launchSource } : {})
+      })
+
+      expect(result?.draftPaste !== undefined).toBe(pasted)
+      expect(result?.startup.telemetry).toEqual({
+        agent_kind: tuiAgentToAgentKind(agent),
+        launch_source: expected,
+        request_kind: 'new'
+      })
+    }
+  )
 })
 
-describe('markLocalWorktreeTrusted', () => {
-  it('waits for the Codex trust write before resolving', async () => {
-    let finish!: () => void
-    mocks.markCodexProjectTrusted.mockReturnValue(
-      new Promise<void>((resolve) => {
-        finish = resolve
-      })
+describe('buildWorktreeStartupForAgent extra agent args', () => {
+  it("merges an automation's extras over the host defaults", () => {
+    const result = buildWorktreeStartupForAgent({
+      repo: makeRepo({}),
+      settings: {
+        ...settings,
+        agentDefaultArgs: { claude: '--dangerously-skip-permissions --model sonnet' }
+      },
+      agent: 'claude',
+      prompt: 'go',
+      extraAgentArgs: '--model opus',
+      getLaunchPlatform: () => 'linux',
+      toSessionOptions: () => undefined
+    })
+
+    expect(result.startup.command).toBe(
+      "claude '--dangerously-skip-permissions' '--model' 'opus' 'go'"
     )
-    let settled = false
-    const marking = markLocalWorktreeTrusted('codex', '/workspace/app').then(() => {
-      settled = true
+  })
+
+  it('refuses invalid extras before any terminal exists', () => {
+    expect(() =>
+      buildWorktreeStartupForAgent({
+        repo: makeRepo({}),
+        settings,
+        agent: 'claude',
+        prompt: 'go',
+        extraAgentArgs: '--settings evil.json',
+        getLaunchPlatform: () => 'linux',
+        toSessionOptions: () => undefined
+      })
+    ).toThrow('"--settings"')
+  })
+
+  it('threads worktree-create extras into the startup build', () => {
+    const build = vi.fn(() => ({
+      agent: 'claude' as const,
+      startup: { command: 'claude' }
+    }))
+    const createArgs: RuntimeManagedWorktreeCreateArgs = {
+      repoSelector: 'repo-1',
+      name: 'Review',
+      startupAgent: 'claude',
+      startupPrompt: 'go',
+      startupExtraAgentArgs: '--effort high'
+    }
+    resolveWorktreeCreateAgentStartup(createArgs, build)
+
+    expect(build).toHaveBeenCalledWith('claude', 'go', undefined, {
+      extraAgentArgs: '--effort high'
     })
-
-    await Promise.resolve()
-    expect(settled).toBe(false)
-    finish()
-    await marking
-    expect(mocks.markCodexProjectTrusted).toHaveBeenCalledWith('/workspace/app')
-  })
-
-  it('contains a rejected Codex trust write', async () => {
-    mocks.markCodexProjectTrusted.mockRejectedValueOnce(new Error('write failed'))
-
-    await expect(markLocalWorktreeTrusted('codex', '/workspace/app')).resolves.toBeUndefined()
-  })
-
-  /**
-   * Why this test exists: Orca has two trust dispatch chains — the renderer's
-   * preflightAgentTrust (via the agentTrust:markTrusted IPC) and this main-process
-   * one, which is the only path `orchestration worker-start` takes. Adding
-   * `preflightTrust: 'antigravity'` to TUI_AGENT_CONFIG clears the `!preset` guard
-   * here but matched none of the cursor/copilot/codex branches, so every supervised
-   * agy worker still failed at agent_readiness with 'agent-trust-workspace' while
-   * the renderer-side unit tests passed. Verified live: with the branch added, the
-   * worktree is appended to ~/.gemini/antigravity-cli/settings.json and the dispatch
-   * reaches worker_done.
-   */
-  it('writes the agy workspace trust artifact on the orchestration path', async () => {
-    await markLocalWorktreeTrusted('antigravity', '/workspace/app')
-
-    expect(mocks.markAntigravityWorkspaceTrusted).toHaveBeenCalledWith('/workspace/app')
-  })
-
-  it('contains a throwing agy trust write', async () => {
-    mocks.markAntigravityWorkspaceTrusted.mockImplementationOnce(() => {
-      throw new Error('write failed')
-    })
-
-    await expect(markLocalWorktreeTrusted('antigravity', '/workspace/app')).resolves.toBeUndefined()
   })
 })

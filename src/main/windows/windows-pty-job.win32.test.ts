@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { IPty } from 'node-pty'
+import { runProcess } from '../../shared/child-process/run-process'
 import {
   isPtyJobOwnershipAvailable,
   listPtyJobProcessIds,
@@ -101,6 +102,116 @@ describeOnWindows('ConPTY job ownership', () => {
     // old probe, so every assertion below would pass vacuously.
     expect(isPtyJobOwnershipAvailable()).toBe(true)
   })
+
+  it.each([
+    ['kill', 'connected'],
+    ['destroy', 'immediate']
+  ] as const)(
+    'retires a quiet child with %s at the %s fence',
+    async (operation, fence) => {
+      const result = await runProcess({
+        program: process.execPath,
+        args: [
+          join(process.cwd(), 'config', 'scripts', 'windows-pty-pre-ready-teardown.cjs'),
+          operation,
+          fence
+        ],
+        env: { ...process.env, ORCA_BACKGROUND_LAUNCH: '1' },
+        timeoutMs: 20_000
+      })
+      if (result.code === 0 && !result.timedOut) {
+        console.log(result.stdout)
+        if (result.stderr) {
+          console.error(result.stderr)
+        }
+      }
+      expect(result, `${result.stdout}\n${result.stderr}`).toMatchObject({
+        code: 0,
+        timedOut: false
+      })
+      expect(result.stdout).toContain('"phase":"complete"')
+      expect(result.stdout).toContain('"exitCallbacks":1')
+    },
+    30_000
+  )
+
+  it.each(['dll', 'inbox'] as const)(
+    'retires a closed forwarding connection with the %s backend',
+    async (backend) => {
+      const result = await runProcess({
+        program: process.execPath,
+        args: [
+          join(process.cwd(), 'config', 'scripts', 'windows-pty-closed-forwarding-teardown.cjs'),
+          backend
+        ],
+        env: { ...process.env, ORCA_BACKGROUND_LAUNCH: '1' },
+        timeoutMs: 20_000
+      })
+      if (result.code === 0 && !result.timedOut) {
+        console.log(result.stdout)
+        if (result.stderr) {
+          console.error(result.stderr)
+        }
+      }
+      expect(result, `${result.stdout}\n${result.stderr}`).toMatchObject({
+        code: 0,
+        timedOut: false
+      })
+      expect(result.stdout).toContain('"phase":"complete"')
+      expect(result.stdout).toContain('"nativeExitCallbacks":1')
+      expect(result.stdout).toContain('"exitCallbacks":1')
+    },
+    30_000
+  )
+
+  it.each(['dll', 'inbox'] as const)(
+    'retries closed-forwarding cleanup after a failed first kill with the %s backend',
+    async (backend) => {
+      const result = await runProcess({
+        program: process.execPath,
+        args: [
+          join(process.cwd(), 'config', 'scripts', 'windows-pty-closed-forwarding-teardown.cjs'),
+          backend,
+          'retry'
+        ],
+        env: { ...process.env, ORCA_BACKGROUND_LAUNCH: '1' },
+        timeoutMs: 20_000
+      })
+      if (result.code === 0 && !result.timedOut) {
+        console.log(result.stdout)
+        if (result.stderr) {
+          console.error(result.stderr)
+        }
+      }
+      expect(result, `${result.stdout}\n${result.stderr}`).toMatchObject({
+        code: 0,
+        timedOut: false
+      })
+      expect(result.stdout).toContain('"phase":"complete"')
+      expect(result.stdout).toContain('"nativeExitCallbacks":1')
+      expect(result.stdout).toContain('"exitCallbacks":1')
+      expect(result.stdout).toContain('"retryFault":true')
+    },
+    30_000
+  )
+
+  it('keeps the native table intact while shell cleanup overlaps new terminals', async () => {
+    const result = await runProcess({
+      program: process.execPath,
+      args: [join(process.cwd(), 'config', 'scripts', 'windows-pty-table-stress.cjs')],
+      env: { ...process.env, ORCA_BACKGROUND_LAUNCH: '1' },
+      timeoutMs: 90_000
+    })
+    const status = result.code === null ? 'null' : `0x${(result.code >>> 0).toString(16)}`
+    if (result.code === 0 && !result.timedOut) {
+      console.log(result.stdout)
+    }
+    expect(
+      result,
+      `Native host exited ${status} (${result.signal}); timedOut=${result.timedOut}\n${result.stdout}\n${result.stderr}`
+    ).toMatchObject({ code: 0, timedOut: false })
+    expect(result.stdout).toContain('"phase":"complete"')
+  }, 100_000)
 
   it('counts a detached grandchild as part of the pane tree', async () => {
     const { proc, grandchildPid } = await spawnShellWithDetachedGrandchild()

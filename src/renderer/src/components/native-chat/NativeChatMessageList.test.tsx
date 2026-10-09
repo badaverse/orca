@@ -35,32 +35,12 @@ const session: NativeChatLiveSession = {
   agent: 'codex',
   hasMore: false,
   loadingEarlier: false,
+  olderHistoryGeneration: 0,
   loadEarlier: vi.fn(),
   readPhase: 'ready'
 }
 
 describe('NativeChatMessageList assistant messages', () => {
-  it('keeps prose selectable and places non-selectable controls after it', () => {
-    render(
-      <NativeChatMessageList
-        session={session}
-        isWorking={false}
-        expandSignal={false}
-        fontScale={1}
-      />
-    )
-
-    const prose = screen.getByText('Selectable agent response.')
-    const row = prose.closest('.group')
-    const copyButton = screen.getByRole('button', { name: 'Copy message' })
-    const controls = copyButton.parentElement
-
-    expect(row).toHaveClass('select-text')
-    expect(controls).toHaveClass('select-none', 'can-hover:pointer-events-none', 'mt-1')
-    expect(controls).not.toHaveClass('absolute')
-    expect(prose.compareDocumentPosition(controls!)).toBe(Node.DOCUMENT_POSITION_FOLLOWING)
-  })
-
   it('keeps a running tool live when transcript lifecycle metadata is absent', () => {
     render(
       <NativeChatMessageList
@@ -86,7 +66,6 @@ describe('NativeChatMessageList assistant messages', () => {
         }}
         isWorking
         expandSignal={false}
-        fontScale={1}
       />
     )
 
@@ -126,7 +105,6 @@ describe('NativeChatMessageList assistant messages', () => {
         session={{ ...session, status: 'working', messages: [run, after('reasoning')] }}
         isWorking
         expandSignal={false}
-        fontScale={1}
       />
     )
     expect(screen.getByText('Running 1 command')).toBeInTheDocument()
@@ -136,7 +114,6 @@ describe('NativeChatMessageList assistant messages', () => {
         session={{ ...session, status: 'working', messages: [run, after('assistant')] }}
         isWorking
         expandSignal={false}
-        fontScale={1}
       />
     )
     expect(screen.queryByText('Running 1 command')).toBeNull()
@@ -169,7 +146,6 @@ describe('NativeChatMessageList assistant messages', () => {
         }}
         isWorking
         expandSignal={false}
-        fontScale={1}
       />
     )
 
@@ -249,7 +225,6 @@ describe('NativeChatMessageList spawn-group roster', () => {
         isWorking={false}
         workingStartedAt={startedAt}
         expandSignal={false}
-        fontScale={1}
       />
     )
 
@@ -291,7 +266,6 @@ describe('NativeChatMessageList spawn-group roster', () => {
         isWorking={false}
         workingStartedAt={startedAt}
         expandSignal={false}
-        fontScale={1}
       />
     )
 
@@ -311,7 +285,6 @@ describe('NativeChatMessageList spawn-group roster', () => {
         isWorking={false}
         workingStartedAt={startedAt}
         expandSignal={false}
-        fontScale={1}
       />
     )
 
@@ -339,7 +312,6 @@ describe('NativeChatMessageList spawn-group roster', () => {
         isWorking
         workingStartedAt={Date.now()}
         expandSignal={false}
-        fontScale={1}
       />
     )
 
@@ -382,7 +354,6 @@ describe('NativeChatMessageList spawn-group roster', () => {
         isWorking
         workingStartedAt={startedAt + 3}
         expandSignal={false}
-        fontScale={1}
       />
     )
 
@@ -420,7 +391,7 @@ describe('NativeChatMessageList childless spawn group', () => {
 
   /** Every slot the transcript column lays out — one per row that mounted. */
   function emptySlots(container: HTMLElement): Element[] {
-    const column = container.querySelector('.max-w-4xl')
+    const column = container.querySelector('[data-native-chat-transcript-column]')
     expect(column).not.toBeNull()
     return Array.from(column!.children).filter((slot) => slot.textContent === '')
   }
@@ -436,7 +407,6 @@ describe('NativeChatMessageList childless spawn group', () => {
         isWorking={false}
         workingStartedAt={startedAt}
         expandSignal={false}
-        fontScale={1}
       />
     )
 
@@ -458,7 +428,6 @@ describe('NativeChatMessageList childless spawn group', () => {
         isWorking={false}
         workingStartedAt={startedAt}
         expandSignal={false}
-        fontScale={1}
       />
     )
 

@@ -4,22 +4,41 @@ import {
 } from './claude-context-usage'
 import type { StructuredAgentSessionEventSink } from '../native-chat/agent-session-wire/structured-agent-session-event-sink'
 import type { ClaudeStreamJsonConnection } from './claude-stream-json-connection'
-import type { ClaudeJournalTranslator } from './claude-structured-journal-translation'
-import type { createClaudeInitDeadline } from './claude-structured-init-deadline'
+import type { ClaudeJournalTranslator } from './claude-journal-translator-contract'
+import { createClaudeJournalTranslator } from './claude-structured-journal-translation'
+import type { ClaudeInitProof } from './claude-structured-init-proof'
 import type {
   ClaudeAcquisitionAttempt,
   ClaudeAcquireCallbacks
 } from './claude-structured-session-state'
 
+export function createClaudeSessionJournalTranslator(
+  sink: StructuredAgentSessionEventSink | undefined,
+  fallbackIdPrefix: string,
+  failure: Parameters<typeof createClaudeJournalFailureHandler>[0]
+): ClaudeJournalTranslator | null {
+  const { attempt } = failure
+  return sink
+    ? createClaudeJournalTranslator({
+        sink,
+        account: () => attempt.account,
+        fallbackIdPrefix,
+        onBackgroundTaskJournalFailure: createClaudeJournalFailureHandler(failure),
+        bindPromptItemId: (itemId, promptKey) =>
+          attempt.prompts.bindJournalItemId(itemId, promptKey)
+      })
+    : null
+}
+
 export function createClaudeJournalFailureHandler(input: {
   attempt: ClaudeAcquisitionAttempt
-  initDeadline: ReturnType<typeof createClaudeInitDeadline>
+  initProof: ClaudeInitProof
   callbacks: ClaudeAcquireCallbacks
   sessionId: string
 }): (error: Error) => void {
   return (error) => {
     if (!input.attempt.published) {
-      input.initDeadline.reject(error)
+      input.initProof.reject(error)
       return
     }
     const connection = input.attempt.connection
